@@ -1,0 +1,4 @@
+appId: com.andithemudkip.pinify
+publish:
+    provider: github
+    token: eccf96a3539598226787bf92794920da14649587
