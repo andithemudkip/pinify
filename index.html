@@ -1,0 +1,1897 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>Pinify</title>
+
+  <link rel="stylesheet" type="text/css" href="index.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+
+  <script>
+    if (typeof module === 'object') { window.module = module; module = undefined; }
+  </script>
+  <script src="libraries/jquery-3.3.1.min.js"></script>
+  <script src="libraries/jquery-ui.min.js"></script>
+  <script src="libraries/stash.min.js"></script>
+  <script src="libraries/mousetrap.min.js"></script>
+  <script src="libraries/jscolor.js"></script>
+  <script src="libraries/youtubeinfo.js"></script>
+  <script src="libraries/link_processor.js"></script>
+  <script src="libraries/dragend.min.js"></script>
+  <script>
+    if (window.module) module = window.module;
+  </script>
+
+</head>
+
+<body>
+  <div id="electron-titlebar" style="position: fixed;height: 26px;" class="drag" platform="linux">
+    
+    <div id="titlebar-title">Pinify</div>
+  </div>
+  <script>
+    let reconnects = 0;
+    let Profile = {
+      login_method: 'not-logged-in',
+      id: 0,
+      name: "Me",
+      friends: { data: [] }
+    };
+    const path = require('path');
+    let pins = [];
+    let groups = {};
+    let group_names = [];
+    let encryptedGroups = [];
+    let inAppNotifications = [];
+    let pendingSnapshots = {};
+    let selectedGroup = { id: 'offline-pins' };
+    const { ipcRenderer } = require('electron');
+    ipcRenderer.send("returnUserDataPath");
+    let metafetch = require('metafetch');
+    const shell = require('electron').shell;
+    const {dialog} = require('electron').remote;
+    const bcrypt = require('bcryptjs');
+    $(document).on('click', 'a[href^="http"]', function (event) {
+      event.preventDefault();
+      shell.openExternal(this.href);
+    });
+    const WindowsToaster = require('node-notifier').WindowsToaster;
+    let userDataPath = '';
+    ipcRenderer.on('userDataPath', (event, arg) => {
+      userDataPath = arg;
+      // console.log(userDataPath);
+    });
+    ipcRenderer.on('updateReady', (event, arg) => {
+      console.log(arg);
+      //info.releaseNotes / releaseName / releaseDate
+      ShowUpdateReady("Update ready! (" + arg.releaseName + ")", "New version is ready for install!\n" + arg.releaseNotes + "\nUpdate and restart Pinify?");
+    });
+    function SendNotification(title, text, cb) {
+      if (localStorage.getItem('notifications') == "true" && process.platform == 'win32') {
+        var notifier = new WindowsToaster({
+          withFallback: true, // Fallback to Growl or Balloons? 
+          customPath: void 0 // Relative path if you want to use your fork of toast.exe 
+        });
+        notifier.notify({
+          title: title,
+          message: text,
+          icon: path.join(__dirname, '..', 'images', 'PinifyLogo512x512.png'),
+          sound: true, // true | false. 
+          wait: true // Wait for User Action against Notification,
+          // contentImage: void 0,
+        }, function (error, response) {
+          console.log(response);
+        });
+        notifier.on('click', function (notifierObject, options) {
+          cb(notifierObject, options);
+        });
+      }
+    }
+
+
+    const numberWithCommas = (x) => {
+      var parts = x.toString().split(".");
+      parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+      return parts.join(".");
+    }
+
+    Mousetrap.bind('mod+k', () => {
+      ToggleGroupList(true);
+    });
+    Mousetrap.bind('mod+n', () => {
+      $("#create-pin-button").click();
+    });
+    Mousetrap.bind('mod+shift+n', () => {
+      $("#create-group-button").click();
+    });
+    Mousetrap.bind('mod+down', () => {
+
+    });
+    $(document).on('keyup', function (e) {
+      if (e.keyCode == 27) { //esc
+        if ($("#left-side-bar").css("width") == '200px') {
+          ToggleGroupList();
+        }
+        $(".bottom-dialogue").each(function () {
+          $(this).removeClass("dialogue-shown");
+          $(this).addClass("dialogue-hidden");
+        });
+        $("#dark-cover").fadeOut(300);
+        // $("#wrapper").removeClass("blur");
+        $(".text, .pin").each(function () {
+          $(this).removeClass("open");
+          $(this).addClass("closed");
+        });
+        $(".pin-wrapper").each(function () {
+          $(this).children(".pin-buttons").fadeOut(300);
+          $(this).children('.youtube-video-preview').fadeOut(300);
+        });
+        $(".group-list-item").each(function () {
+          $(this).children(".group-context").fadeOut(100);
+        });
+      }
+      else if (e.keyCode == 13) {//enter
+        if ($("#create-group-dialogue").hasClass("dialogue-shown")) {
+          $("#new-group-button").click();
+        }
+      }
+    });
+
+    function ShowUpdateReady(title, content) {
+      $("#update-ready-notification").addClass("notification-shown");
+      $("#update-ready-notification").removeClass("notification-hidden");
+      $("#update-ready-notification").draggable({
+        axis: "x",
+        drag: function () {
+          $(this).css('transition', 'background-color .3s');
+          if (Number($(this).css('left').substring(0, $(this).css('left').length - 2)) > .2 * window.innerWidth) {
+            if ($(this).css('background-color') != 'rgba(35,35,40,.5)') {
+              $(this).css('background-color', 'rgba(35,35,40,.5)');
+            }
+          }
+          else {
+            if ($(this).css('background-color') != 'rgb(35,35,40)') {
+              $(this).css('background-color', 'rgb(35,35,40)');
+            }
+          }
+        },
+        start: function () {
+          $(this).css('transition', 'top .5s, left .2s, background-color .3s');
+        },
+        stop: function () {
+          $(this).css('transition', 'top .5s, left .2s, background-color .3s');
+          if (Number($(this).css('left').substring(0, $(this).css('left').length - 2)) > .2 * window.innerWidth) {
+            DismissNotification($(this).attr('id'));
+          }
+          else {
+            $(this).css('left', '0px');
+            $(this).css('width', '100%');
+          }
+        }
+      });
+      $("#update-ready-notification").children('.notification-body').html("<b>" + title + "</b><br>" + content);
+    }
+    function ShowInAppNotification(title, content, newnotif = true, time = 2000) {
+      if ($(".in-app-notification").length < 2) {
+        if (!$("#" + "notif_" + title.split(' ').join('-').toLowerCase()).length) {
+          let n = $("<div/>", {
+            class: "in-app-notification notification-hidden",
+            id: 'notif_' + title.split(' ').join('-').toLowerCase()
+          }).appendTo("#notifications-wrapper");
+          let b = $("<div/>", {
+            html: "<b>" + title + "</b><br>" + content,
+            class: "notification-body"
+          }).appendTo(n);
+          setTimeout(function () {
+            $(n).removeClass("notification-hidden");
+            $(n).addClass("notification-shown");
+          }, 200);
+          $(n).draggable({
+            axis: "x",
+            drag: function () {
+              $(this).css('transition', 'background-color .3s');
+              if (Number($(this).css('left').substring(0, $(this).css('left').length - 2)) > .2 * window.innerWidth) {
+                if ($(this).css('background-color') != 'rgba(170,170,175,.5)') {
+                  $(this).css('background-color', 'rgba(170,170,175,.5)');
+                }
+              }
+              else {
+                if ($(this).css('background-color') != 'rgb(170,170,175)') {
+                  $(this).css('background-color', 'rgb(170,170,175)');
+                }
+              }
+            },
+            start: function () {
+              $(this).css('transition', 'top .5s, left .2s, background-color .3s');
+            },
+            stop: function () {
+              $(this).css('transition', 'top .5s, left .2s, background-color .3s');
+              if (Number($(this).css('left').substring(0, $(this).css('left').length - 2)) > .2 * window.innerWidth) {
+                DismissNotification($(this).attr('id'));
+              }
+              else {
+                $(this).css('left', '0px');
+                $(this).css('width', '100%');
+              }
+            }
+          });
+        }
+        setTimeout(function () {
+          // console.log('why');
+          DismissNotification('notif_' + title.split(' ').join('-').toLowerCase());
+        }, time);
+      }
+      if (newnotif) {
+        inAppNotifications.push({ title: title, content: content });
+      }
+
+
+      // else{
+      //   inAppNotifications.push({title:title, content: content});
+      //   console.log(inAppNotifications);
+      // }
+
+
+    }
+    function DismissNotification(id) {
+      switch (id) {
+        case "update-ready-notification":
+          $("#" + id).removeClass("notification-shown");
+          $("#" + id).removeAttr('style');
+          $("#" + id).addClass("notification-hidden");
+          break;
+        default:
+          $("#" + id).removeAttr('style');
+          $("#" + id).removeClass("notification-shown");
+          $("#" + id).addClass("notification-hidden");
+          setTimeout(function () {
+            $("#" + id).remove();
+            inAppNotifications.splice(0, 1);
+            if (inAppNotifications.length) {
+              let notif = inAppNotifications[0];
+              ShowInAppNotification(notif.title, notif.content, false);
+            }
+          }, 500);
+          break;
+      }
+    }
+    function ToggleGroupList(cmnd = false) {
+      if ($("#left-side-bar").css("width") == '72px') {
+        $("#left-side-bar").css("width", "200px");
+        if (cmnd) $("#group-search-input").focus();
+        $(".group-list-item").addClass("group-visible");
+        if (window.innerWidth < 450) {
+          $(".pin-wrapper").each(function () {
+            $(this).children(".pin-buttons").fadeOut(300);
+          })
+        }
+      }
+      else {
+        $("#left-side-bar").css("width", '72px');
+        $(".group-list-item").removeClass("group-visible");
+        $(".group-context").fadeOut(100);
+      }
+    }
+  </script>
+  <div id="wrapper">
+    <div style="height:26px"></div>
+    <div id="top-bar">
+      <input type="button" class="show-list-btn">
+      <!-- <div class = "group-info"></div> -->
+      <img id="own-pp" class="profile-picture" src="images/temp_pp.png">
+      <div style = "display: none;" class = "name-wrapper">
+        <span id="own-name" class="own-name"></span>
+        <!-- <div style = "margin-top: 20px; float: right; width: 50px; height: 25px; background-color: black;"></div> -->
+      </div>
+      <div id = "own-friends-button"><i class = 'material-icons'>people</i><br><b id = "friend-count">0/5</b></div>
+    </div>
+    <div id="fb-login-banner">
+      <div class="text">Log in so you can create groups and share your pins with all your friends!</div>
+      <input type="button" class="show-list-btn">
+      <!-- <button id="fb-login-btn">Sign in with Facebook</button> -->
+      <div id = "show-login-dialogue-btn">Log in</div>
+    </div>
+    <div id="group-info">
+      <div id="g-info-group-name"></div>
+      <div id="g-info-group-members">1 member</div>
+    </div>
+    <div id="mid-wrapper">
+      <div id="left-side-bar">
+        <div id="group-wrapper">
+          <!-- <div class="mouse-cursor-gradient-tracking">
+            <span>Hover me</span>
+          </div> -->
+          <input type="text" id="group-search-input" placeholder="search">
+          <!-- 
+            <div class="group-list-item" id="grup1oicfnqftaa3y25c4tdj01ss">
+              <div class="group-thumb" style="box-shadow: inset 0px 0px 0px 1px rgb(25, 150, 240);">
+                <span class="group-name">test</span>
+              </div>
+              <div class = "group-context">
+                <div class = "group button"></div>
+                <div class = "group button"></div>
+              </div>
+            </div> -->
+
+          <div id='offline-separator' class="group-separator"></div>
+          <div id="create-group-button"> + </div>
+        </div>
+      </div>
+      <div id="pins-wrapper"></div>
+      <!--here go pins-->
+      <div id="create-pin-button"> + </div>
+    </div>
+  </div>
+  <!-- CREATE GROUP -->
+  <div id="create-group-dialogue" class="bottom-dialogue dialogue-hidden">
+    <div class='dialogue-left'>
+      <div class='d-title'>New Group</div>
+      <button id="group-color-picker" class="jscolor {valueElement:null,value:'#1996f0',width:145, height: 145, padding:0, shadow:false,borderWidth:0, backgroundColor:'transparent', insetColor:'#000'}"></button>
+      <div class="d-subtitle">Group Color</div>
+      <div data-image-url = '' data-image-extension = '' id = "group-image-picker">no image</div>
+      <div id = "group-image-text" class="d-subtitle"></div>
+      <div class="d-subtitle">Group Image</div>
+    </div>
+    <div style="flex:1; display: flex; flex-direction: column; min-width: 0 !important;">
+      <input style="margin-bottom: -15px;" placeholder='Name...' class='new-input' id="new-group-title"> <br>
+      <input type="password" style="margin-bottom: -15px;" placeholder='Password (optional)...' class='new-input' id="new-group-password">
+      <div style="margin-top: 20px; color: rgb(160,160,160);padding-left: 10px; padding-right: 5px; font-size:12px;"><b style='color: rgb(175,175,175);'>Remember the password</b>, everyone you add to the group needs to type it in. (including you)</div>
+      <div style="color: rgb(160,160,160);padding-left: 10px; padding-right: 5px; font-size: 12px;">If you leave the password field empty the pins will <b>not</b> be encrypted.</div>
+    </div>
+    <div class="create-new-button" id="new-group-button">Create</div>
+    <div class="cancel-new-button" onclick="ToggleDialogue('#create-group-dialogue');">Cancel</div>
+  </div>
+  <!-- CREATE PIN -->
+  <div id="create-pin-dialogue" class="bottom-dialogue dialogue-hidden">
+    <div class='dialogue-left'>
+      <div class='d-title'>New Pin</div>
+      <button id="pin-color-picker" style='display:none;' class="jscolor {valueElement:null,value:'#1996f0',width:145, height: 145, padding:0, shadow:false,borderWidth:0, backgroundColor:'transparent', insetColor:'#000'}"></button>
+    </div>
+    <textarea placeholder="Enter pin text here..." id="new-pin-text" required></textarea>
+    <div class="create-new-button" id="new-pin-button">Create</div>
+    <div class="cancel-new-button" onclick="ToggleDialogue('#create-pin-dialogue');">Cancel</div>
+  </div>
+  <!-- PROFILE -->
+  <div id="profile-dialogue" class="bottom-dialogue dialogue-hidden">
+    
+    <div id = "profile-left-bar">
+      <div style = "padding: 10px; color: rgb(220, 220, 220); font-weight: bold;">Settings</div> <!-- just visual -->
+      <div data-settings-page = "app-settings-wrapper" class = "profile-left-list-item active">App</div>
+      <div data-settings-page = "sync-settings-wrapper" class = "profile-left-list-item">Sync</div>
+      <div data-settings-page = "account-settings-wrapper"class = "profile-left-list-item">Account</div>
+      <div id="fb-logout-btn" class = "profile-left-list-item">Sign Out</div>
+    </div>
+    <div id = "profile-right-bar">
+      <!-- APP SETTINGS -->
+      <div id = "app-settings-wrapper" class = "settings-wrapper">
+        <div class="toggle">
+          <div class="toggle-text">Notifications</div>
+          <label class="switch">
+            <input class = "toggle-checkbox" id = "notifications-toggle" type = "checkbox" checked>
+            <span class = "slider round"></span>
+          </label>
+        </div>
+        <!-- <div class="toggle">
+          <div class="toggle-text">Link Previews</div>
+          <label class="switch">
+            <input class = "toggle-checkbox" id = "webshot-previews-toggle" type = "checkbox" checked>
+            <span class = "slider round"></span>
+          </label>
+        </div> -->
+      </div>
+      <!-- SYNC SETTINGS -->
+      <div id = "sync-settings-wrapper" class = "settings-wrapper" style = "display: none;">
+          This is empty for now //shrug [sync]
+      </div>
+      <!-- ACCOUNT SETTINGS -->
+      <div id = "account-settings-wrapper" class = "settings-wrapper" style = "display: none;">
+          <!-- This is empty for now //shrug [account] -->
+          <div id = "change-profile-picture-wrapper">
+            <div class = "toggle-text" style = "float:left; line-height: 35px;">Profile Picture</div>
+            <div id = "change-profile-picture-button" class = "image"><div style = "margin-top: 35px;">Change</div></div>
+          </div>
+      </div>
+    </div>
+  </div>
+  <!-- GROUP MEMBERS -->
+  <div id="group-members-dialogue" class="bottom-dialogue dialogue-hidden">
+    <div class='dialogue-left'>
+      <div class='d-title'>Group Members</div>
+      <div id="group-members-list">
+      </div>
+    </div>
+    <div class="dropdown">
+      <div style="margin-left: 5px;">Add member</div>
+      <div style="display: inline-block; display:flex; flex-direction: row; margin-top:5px;">
+        <input class="new-input" type="text" placeholder="Name.." id="group-dropdown-input" onkeyup="filterGroupMembersDropdown()">
+        <input id="add-member-to-group-button" type="button" value="Add">
+      </div>
+      <div id="group-members-dropdown" class="dropdown-content">
+      </div>
+    </div>
+    <div class="cancel-new-button" onclick="ToggleDialogue('#group-members-dialogue');">Okay</div>
+  </div>
+  <!-- FRIENDS -->
+  <div id="friends-dialogue" class="bottom-dialogue dialogue-hidden">
+    
+    <div id = "friends-left-bar">
+      <div style = "padding: 10px; color: rgb(200, 200, 200); font-weight: bold;">Your Friend Code</div>
+      <div id = "own-friends-token"></div>
+      <div style = "padding: 10px; color: rgb(220, 220, 220); font-weight: bold;">Friends</div>
+    </div>
+    <div id = "friends-right-bar">
+      <div id = "friend-info-wrapper">No Friend Selected</div>
+    </div>
+  </div>
+  
+  <!-- USER PASSWORD DIALOGUE -->
+  <div class="fullscreen-dialogue" id="enter-password-dialogue">
+    <div class="password-dialogue-wrapper">
+      <div style="margin: 5px;margin-top: 20px;"><b id="password-dialogue-firstname"></b><br>Please enter your Pinify password</div>
+      <input id="user-password-input" type='password' placeholder='Password...' required>
+      <div></div>
+      <input type='button' id="enter-password-button" value='Continue'>
+      <div><a id="skip-enter-password" href="#">Skip [you won't be able to use online groups]</a></div>
+      <div style="margin: 5px;font-size: 12px; font-style: italic; color: rgb(120,120,120); margin-top: 20px;">If this is the first time you log in, this will be your password; otherwise, enter the password you have previously
+        used.
+      </div>
+      <div style="margin: 5px;font-size: 12px; font-style: italic; color: rgb(110,110,110); margin-top: 10px;">This password is used so that other people cannot impersonate you.</div>
+    </div>
+  </div>
+  <!-- GROUP PASSWORD DIALOGUE -->
+  <div class="fullscreen-dialogue" id="enter-group-password-dialogue">
+    <div class="password-dialogue-wrapper">
+      <div style="margin: 5px;margin-top: 20px;padding-left: 20px; padding-right: 20px;">You have joined the encrypted group <b id="encrypted-group-name"></b>, please enter the group password!</div>
+      <input id="group-join-password-input" type='password' placeholder='Password...' required>
+      <div></div>
+      <input type='button' id="group-join-password-button" value='Continue'>
+      <div><a id="skip-enter-group-password" href="#">Skip [until next login]</a></div>
+      <div><a id="refuse-enter-group-password" href="#">Quit group</a></div>
+      <div style="margin: 5px;font-size: 13px; font-style: italic; color: rgb(120,120,120); margin-top: 20px;padding-left: 20px; padding-right: 20px;">If you don't know what the password is, ask the person who added you to the group.</div>
+    </div>
+  </div>
+  <!-- LOGIN DIALOGUE -->
+  <div class = "fullscreen-dialogue" id = "user-login-dialogue">
+    <div id = "user-login-dialogue-wrapper">
+      <div>Log in to Pinify</div>
+      <input id = "pinify-username-input" class = "user-login-input" placeholder="Username" style = "margin-bottom: 0px;">
+      <input id = "pinify-password-input" type = "password" class = "user-login-input" placeholder="Password">
+      <div id = "login-to-pinify-button">Sign in</div>
+      <div id="fb-login-btn"><img src = "https://www.facebook.com/images/fb_icon_325x325.png" height = "35px" style = "float:left; margin-right: 5px;">Sign in with Facebook</div>
+      <div style = "display: inline-block; width: 270px !important; margin-left: -60px; left: 50%; height: 35px !important; margin-top: 5px;"><div style = "color: rgb(160,160,160); float:left; line-height: 35px;">Don't have an account?</div><div id = "signup-to-pinify-button" style = "float: right;">Sign up</div></div> 
+      <a id = "cancel-login" href = "#">Not now</a>
+    </div>
+  </div>
+  <!-- REGISTER DIALOGUE -->
+  <div class = "fullscreen-dialogue" id = "user-register-dialogue">
+    <div id = "user-register-dialogue-wrapper">
+      <div>Register to Pinify</div>
+      <input id = "pinify-fullname-input-register" class = "user-login-input" placeholder="Full Name / Display Name" style = "margin-bottom: 0px;">
+      <input id = "pinify-username-input-register" class = "user-login-input" placeholder="Username" style = "margin-bottom: 0px;">
+      <input id = "pinify-password-input-register" type = "password" class = "user-login-input" placeholder="Password">
+      <div id = "register-to-pinify-button">Sign up</div>
+      <a id = "cancel-register" href = "#">Not now</a>
+    </div>
+  </div>
+
+  <!-- NOTIFICATIONS WRAPPER -->
+  <div id="notifications-wrapper">
+    <div id="update-ready-notification" class="in-app-notification notification-hidden">
+      <div class="notification-body"><b>Update ready (1.0.0)</b><br>Testing auto updater</div>
+      <div id="apply-update-button">Update</div>
+    </div>
+  </div>
+
+  <div id="dark-cover"></div>
+  <script>
+
+    require('./renderer.js');
+    require('electron-titlebar');
+
+    let settings = [{ name: 'notifications', defaultValue: "true", id: 'notifications-toggle' }, {name: 'webshot-previews', defaultValue: "true", id: 'webshot-previews-toggle' }];
+    function InitLocalStorage() {
+      for (let i = 0; i < settings.length; i++) {
+        if (!localStorage.getItem(settings[i].name)) {
+          localStorage.setItem(settings[i].name, settings[i].defaultValue);
+        }
+      }
+      $(".toggle-checkbox").each(function () {
+        for (let i = 0; i < settings.length; i++) {
+          if ($(this).attr('id') == settings[i].id) {
+            // console.log(localStorage.getItem(settings[i].name));
+            $(this).prop('checked', (localStorage.getItem(settings[i].name) == "true"));
+          }
+        }
+      });
+    }
+    InitLocalStorage();
+    $(".toggle-checkbox").change(function () {
+      for (let i = 0; i < settings.length; i++) {
+        if (settings[i].id == $(this).attr('id')) {
+          localStorage.setItem(settings[i].name, this.checked);
+        }
+      }
+    });
+    let crypto = require('crypto');
+    function encrypt(text, password) {
+      var cipher = crypto.createCipher('aes-256-ctr', password)
+      var crypted = cipher.update(text, 'utf8', 'hex')
+      crypted += cipher.final('hex');
+      return crypted;
+    }
+
+    function decrypt(text, password) {
+      try {
+        var decipher = crypto.createDecipher('aes-256-ctr', password)
+        var dec = decipher.update(text, 'hex', 'utf8')
+        dec += decipher.final('utf8');
+        return dec;
+      }
+      catch (err) {
+        return text;
+      }
+    }
+    // let socket = require('socket.io-client')('http://localhost:3000');
+    let socket = require('socket.io-client')('https://pinify-server.herokuapp.com/');
+    socket.on('connect', () => {
+      console.log('connected');
+      if (reconnects) {
+        if (Profile.id != 0) {
+          fs.readFile(userDataPath + '/user_config.json', 'utf8', (err, data) => {
+            if (!err) {
+              console.log('sending init');
+              if(Profile.login_method == 'facebook'){
+                socket.emit('fb_initialize_user', { friends: Profile.friends.data, id: Profile.id, name: Profile.name, password: JSON.parse(data).password, image_url: Profile.picture.data.url});
+              }
+              else if(Profile.login_method == 'pinify'){
+                socket.emit('pinify-login', {username: JSON.parse(data).id, password: JSON.parse(data).password});
+              }
+            }
+          });
+        }
+      }
+      else{
+        if(stash.get('pinify_logged_in')){
+          fs.readFile(userDataPath + '/user_config.json', 'utf8', (err, data) => {
+            if (err) {
+            }
+            else{
+              let config = JSON.parse(data);
+              // console.log(config);
+              if(config.id && config.password){
+                socket.emit('pinify-login', {username: config.id, password: config.password});
+              }
+            }
+          });
+        }
+      }
+      reconnects++;
+    });
+    socket.on('disconnect', () => {
+      console.log('disconnected');
+    });
+    socket.on('pinify_initialize_user', (data) => {
+      PinifyLogIn(data);
+      socket.emit('return-friend-token',{token:data.token});
+    });
+    socket.on('facebook_initialize_user',(data)=>{
+      if(data.image_url){
+        $("#change-profile-picture-wrapper").children('.image').css('background','url("' + data.image_url + '")');
+        $("#own-pp").attr('src', data.image_url);
+      }
+      console.log(data.token);
+      Profile.token = data.token;
+      socket.emit('return-friend-token',{token:data.token});
+    });
+    socket.on('initialize_groups', (group_ids) => {
+      group_ids.forEach((id) => {
+        try {
+          let data = fs.readFileSync(userDataPath + '/PinifyGroupData/' + id.group_id + '.json', 'utf8');
+          let obj = JSON.parse(data);
+          if (obj.secret_key) {
+            let group = {
+              group_id: id.group_id,
+              secret_key: obj.secret_key
+            };
+            socket.emit('sync-group', group);
+          }
+          else {
+            console.log("Ask for secret");
+          }
+        }
+        catch (err) {
+          if (err.code === 'ENOENT') {
+            console.log('File not found!');
+          } else {
+            throw err;
+          }
+        }
+      });
+    });
+    socket.on('sync_group', (data) => {
+      data.id = data.group_id;
+      let group_data = data;
+      let exists = false;
+      for (const key of Object.keys(groups)) {
+        if (groups[key].id == data.group_id) {
+          exists = true;
+          //sync group members
+          fs.readFile(userDataPath + '/PinifyGroupData/' + data.group_id + '.json', 'utf8', (err, data) => {
+            if (err) {
+              console.log(err);
+            }
+            else {
+              let obj = JSON.parse(data);
+              obj.pins = obj.pins.concat(group_data.pins);
+              obj.members = group_data.members;
+              obj.image_url = group_data.image_url;
+              let json = JSON.stringify(obj, null, 4); //remove ,null,4 for optimized print
+              fs.writeFile(userDataPath + '/PinifyGroupData/' + group_data.group_id + '.json', json, 'utf8', (err, fdata) => {
+                if (err) console.log(err);
+                else {
+                  LoadGroupByFileName(group_data.group_id + '.json');
+                }
+              });
+            }
+          });
+        }
+      }
+      if (!exists) {
+        if (!document.hasFocus()) {
+          SendNotification("You joined the group " + group_data.name + "!", "Woohoo", () => {
+            ipcRenderer.send("bringToFront");
+            ToggleToGroup(group_data.group_id);
+          });
+        }
+        CreateGroupFile(data);
+      }
+    });
+    socket.on('create-group', (data) => {
+      data.pins = [];
+      data.members = Profile.id;
+      CreateGroupFile(data);
+    });
+    socket.on('added-to-group', (group_data) => {
+      socket.emit('sync-group', group_data);
+    });
+    socket.on('create-pin', (pin) => {
+      fs.readFile(userDataPath + '/PinifyGroupData/' + pin.group_id + '.json', 'utf8', (err, data) => {
+        if (err) {
+          console.log(err);
+        }
+        else {
+          p = {
+            id: pin.pin_id,
+            data: pin.data,
+            date_time: pin.date_time,
+            creator: pin.creator
+          }
+          let obj = JSON.parse(data);
+          obj.pins.push(p);
+          let json = JSON.stringify(obj, null, 4); //remove ,null,4 for optimized print
+          fs.writeFile(userDataPath + '/PinifyGroupData/' + pin.group_id + '.json', json, 'utf8', (err, fdata) => {
+            if (err) console.log(err);
+            else {
+
+              pins[pin.group_id].push(p);
+              let msgdata = p.data;
+              if (pin.group_id == selectedGroup.id) {
+                if (groups[pin.group_id].is_encrypted) {
+                  p.data = decrypt(p.data, groups[pin.group_id].password);
+                  pins[pin.group_id][pins[pin.group_id].length - 1].decrypted = true;
+                }
+                LoadSinglePin(p);
+                $(".no-pins-message").remove();
+              }
+              if (groups[pin.group_id].is_encrypted) {
+                msgdata = decrypt(msgdata, groups[pin.group_id].password);
+              }
+              if (!document.hasFocus()) {
+                SendNotification("New pin in " + groups[pin.group_id].name + "!", pin.creator + ": " + msgdata, () => {
+                  ipcRenderer.send("bringToFront");
+                  ToggleToGroup(pin.group_id);
+                });
+              }
+            }
+          });
+        }
+      });
+    });
+    socket.on('user-password-correct', () => {
+      $("#enter-password-dialogue").fadeOut(200);
+    });
+    socket.on('user-password-incorrect', () => {
+      if (!$("#enter-password-dialogue").is(":visible")) {
+        $("#password-dialogue-firstname").text(Profile.name.split(' ')[0]);
+        $("#enter-password-dialogue").fadeIn(200, () => {
+          $("#enter-password-dialogue").css('display', 'table');
+        });
+      }
+      console.log('password incorrect');
+      ShowInAppNotification("Wrong Pinify password", "The password you entered for your account is incorrect");
+    });
+    socket.on('signup-complete', (data)=>{
+      let config = {
+        id: data.username,
+        password: data.password
+      };
+      let json = JSON.stringify(config, null, 4); //remove ,null,4 for optimized print
+      fs.writeFile(userDataPath + '/user_config.json', json, 'utf8', (err, d) => {
+        if (err) console.log(err);
+        else {
+          socket.emit('pinify-login', {username: data.username, password: data.password });
+        }
+      });
+      //$(...).fadeOut();
+    });
+    socket.on('username-taken',()=>{
+      ShowInAppNotification("Username is taken","");
+      $("#pinify-username-input-register").val('');
+    });
+    socket.on('user-or-pass-incorrect',()=>{
+      ShowInAppNotification("Username or password incorrect","");
+    });
+    socket.on('profile-picture-changed',(url)=>{
+      $("#change-profile-picture-button").css('background', 'url("' + url + '")');
+      $("#own-pp").attr('src', url);
+    });
+    socket.on('get-friend-token', token=>{
+      $("#own-friends-token").text(token);
+      console.log(token);
+    });
+    function filterGroupMembersDropdown() {
+      let input, filter, ul, li, a, i;
+      input = document.getElementById("group-dropdown-input");
+      filter = input.value.toUpperCase();
+      div = document.getElementById("group-members-dropdown");
+      a = div.getElementsByTagName("a");
+      for (i = 0; i < a.length; i++) {
+        if (a[i].innerHTML.toUpperCase().indexOf(filter) > -1) {
+          a[i].style.display = "";
+        } else {
+          a[i].style.display = "none";
+        }
+      }
+    }
+    function CreateGroupFile(data) {
+      let group = data;
+      if (group.is_encrypted) {
+        AskForEncryptedGroupPassword(group);
+      }
+      else {
+        fs.readFile(userDataPath + '/PinifyGroupData/' + group.id + '.json', 'utf8', (err, data) => {
+          if (err) {
+            console.log(err.code);
+            if (err.code === 'EEXIST') {
+              alert('Group already exists.');
+              return;
+            }
+            else if (err.code === 'ENOENT') {
+              let e_group = {
+                id: group.id,
+                secret_key: group.secret_key,
+                name: group.name,
+                color: group.color,
+                members: group.members,
+                pins: group.pins,
+                password: '',
+                is_encrypted: group.is_encrypted,
+                image_url: group.image_url
+              };
+              let json = JSON.stringify(e_group, null, 4); //remove ,null,4 for optimized print
+              fs.writeFile(userDataPath + '/PinifyGroupData/' + group.id + '.json', json, 'utf8', (err, data) => {
+                if (err) console.log(err);
+                else {
+                  LoadGroupByFileName(group.id + '.json');
+                  $("#new-group-title").val('');
+                  FadeDialogueOut("#create-group-dialogue");
+                }
+              });
+            }
+          }
+        });
+      }
+    }
+    function AskForEncryptedGroupPassword(group) {
+      encryptedGroups.push(group);
+      // console.log(group);
+      if (!$("#enter-group-password-dialogue").is(':visible')) {
+        $("#encrypted-group-name").text(group.name);
+        $("#enter-group-password-dialogue").fadeIn(200, () => {
+          $("#enter-group-password-dialogue").css('display', 'table');
+        });
+      }
+      else {
+        $("#encrypted-group-name").text(group.name);
+      }
+
+    }
+    let fs = require('fs');
+    // fs.mkdir(userDataPath + '/webshots', err => { //check if the webshots folder exists
+    //   if (err && err.code != 'EEXIST') throw err;
+    // })
+    fs.mkdir(userDataPath + '/PinifyGroupData', err => { //check if the group folder exists
+      if (err && err.code != 'EEXIST') throw err;
+    })
+    function LoadGroups(background = false) {
+      groups = {};
+      group_names = [];
+      if (!background) {
+        $(".group-list-item").remove();
+        $("#pin-wrapper").empty();
+      }
+      fs.readdir(userDataPath + '/PinifyGroupData/', 'utf8', (err, files) => {
+        if (err) {
+          console.log(err);
+        }
+        else {
+          //check if the offline pins group exists, if not, create it
+          fs.readFile(userDataPath + '/PinifyGroupData/offline_pins.json', 'utf8', (err, data) => {
+            if (err) {
+              console.log(err.code);
+              if (err.code === 'EEXIST') {
+                console.error('file already exists');
+                return;
+              }
+              else if (err.code === 'ENOENT') {
+                let e_group = {
+                  id: "offline-pins",
+                  name: "Offline Pins",
+                  color: '50,50,55',
+                  pins: [],
+                  members: [{ user_id: Profile.id, user_f_name: Profile.name }]
+                };
+                let json = JSON.stringify(e_group, null, 4); //remove ,null,4 for optimized print
+                fs.writeFile(userDataPath + '/PinifyGroupData/offline_pins.json', json, 'utf8', (err, data) => {
+                  if (err) console.log(err);
+                  else {
+                    console.log(userDataPath + '/PinifyGroupData/offline_pins.json');
+                    LoadGroupByFileName('offline_pins.json');
+                  }
+                });
+              }
+            }
+          });
+          LoadGroupByFileName('offline_pins.json');
+          files.splice(files.indexOf('offline_pins.json'), 1);
+          files.forEach(file => {
+            LoadGroupByFileName(file);
+          });
+        }
+      });
+    }
+    LoadGroups();
+    function SortGroups() {
+      group_names.sort(function (a, b) {
+        return a.toLowerCase().localeCompare(b.toLowerCase());
+      });
+      $(".group-list-item").remove();
+      for (let i = group_names.length; i >= 0; i--) { //ITERATE THRU GROUPS
+        for (const key of Object.keys(groups)) {
+          if (groups[key].name == group_names[i]) {
+            ConstructGroup(groups[key]);
+          }
+        }
+      }
+    }
+    function ConstructGroup(group) {
+      if (!$("#" + group.id).length) {
+        if (group.id == 'offline-pins') {
+          pitm = $("<div/>", {
+            class: "group-list-item",
+            id: group.id
+          }).insertBefore("#offline-separator");
+        } else {
+          pitm = $("<div/>", {
+            class: "group-list-item",
+            id: group.id
+          }).insertAfter("#offline-separator");
+        }
+        let image_opt = '';
+        if(group.image_url){
+          image_opt = 'background: url("' + group.image_url + '"); background-size: 45px 45px;';
+        }
+        let gt = $("<div/>", { class: "group-thumb", style: image_opt }).appendTo(pitm); //style: 'box-shadow: inset 0px 0px 0px 1px rgb(' + group.color + ');' + 
+        let name = group.name;
+        if(name.length > 13){
+          name = name.substring(0, 13);
+          name += '...';
+        }
+        let gn = $("<span/>", {
+          class: "group-name",
+          text: name
+        }).appendTo(gt);
+        let gctxt = $("<div/>", { class: "group-context" }).appendTo(pitm);
+        let gdel = $("<div/>", { class: "group button edit", text: "Edit" }).appendTo(gctxt);
+        let gedit = $("<div/>", { class: "group button leave", text: "Leave" }).appendTo(gctxt);
+      }
+      else {
+        pitm = $("#" + group.id);
+      }
+    }
+    $("#login-to-pinify-button").on('click', function(){
+      let u = $("#pinify-username-input").val();
+      let p = $("#pinify-password-input").val();
+      if(u.length){
+        if(p.length){
+          socket.emit('pinify-login',{username: u, password: p});
+        }
+        else{
+          ShowInAppNotification("Please enter a password","");
+        }
+      }
+      else{
+        ShowInAppNotification("Please enter a username","");
+      }
+    });
+    $("#register-to-pinify-button").on('click', function(){
+      let fname = $("#pinify-fullname-input-register").val();
+      let u = $("#pinify-username-input-register").val();
+      let p = $("#pinify-password-input-register").val();
+      if(u.length){
+        if(p.length){
+          if(fname.length){
+            socket.emit('create-account',{username: u, password: p, name: fname});
+          }
+          else{
+            ShowInAppNotification("Please enter a display name","")
+          }
+        }
+        else{
+          ShowInAppNotification("Please enter a password","");
+        }
+      }
+      else{
+        ShowInAppNotification("Please enter a username","");
+      }
+    });
+    $("#signup-to-pinify-button").on('click', function(){
+      $("#user-register-dialogue").fadeIn(200, ()=>{
+        $("#user-login-dialogue").fadeOut(0);
+      });
+    });
+    $("#group-image-picker").on('click', function(){
+      dialog.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{ name: 'Images', extensions: ['jpg', 'png'] }]
+      }, function(files){
+          if(files !== undefined){
+            let extension = files[0].split('.')[1];
+            let filepath = files[0].split('.')[0];
+            let filename = filepath.split('\\')[filepath.split('\\').length-1];
+            let opt = ( filename.length > 10 ? '...' : '.');
+            $("#group-image-picker").text(filename.substring(0, 7) + opt + extension);
+            $("#group-image-picker").attr('data-image-url', files[0]);
+            $("#group-image-picker").attr('data-image-extension', extension);
+          }
+      });
+    });
+    $("#change-profile-picture-button").on('click', function(){
+      dialog.showOpenDialog({
+        properties: ['openFile'],
+        filters: [{ name: 'Images', extensions: ['jpg', 'png'] }]
+      }, function(files){
+          if(files !== undefined){
+            let extension = files[0].split('.')[1];
+            let filepath = files[0].split('.')[0];
+            let filename = filepath.split('\\')[filepath.split('\\').length-1];
+            // let opt = ( filename.length > 10 ? '...' : '.');
+            let b64_img = base64_encode(files[0]);
+            let img = 'data:image/' + extension + ';base64,' + b64_img;
+            socket.emit('change-profile-picture',{image:img, token: Profile.token});
+            console.log()
+            //here
+            // $("#group-image-picker").text(filename.substring(0, 7) + opt + extension);
+            // $("#group-image-picker").attr('data-image-url', files[0]);
+            // $("#group-image-picker").attr('data-image-extension', extension);
+          }
+      });
+    });
+    $("#show-login-dialogue-btn").on("click", function(){
+      $("#user-login-dialogue").fadeIn(300);
+    });
+    $(".profile-left-list-item").on("click", function(){
+      $(".profile-left-list-item").removeClass("active");
+      $(this).addClass("active");
+      $(".settings-wrapper").fadeOut(0);
+      $("#" + $(this).attr('data-settings-page')).fadeIn(0);
+    });
+    $("#friends-left-bar").on("click", ".friend-list-item", function(){
+      $(".friend-list-item").removeClass("active");
+      $(this).addClass("active");
+      // $("#" + $(this).attr('data-settings-page')).fadeIn(0);
+    });
+    $("#notifications-wrapper").on("click", ".dismiss-notification-button", function () {
+      DismissNotification($(this).parents('.in-app-notification').attr('id'));
+    });
+    $("#apply-update-button").on('click', function () {
+      ipcRenderer.send('quitAndInstall');
+    });
+    $("#add-member-to-group-button").on('click', function () {
+      let name = $("#group-dropdown-input").val();
+      for (let i = 0, friends = Profile.friends.data; i < friends.length; i++) {
+        if (friends[i].name == name) {
+          AddMemberToGroup(friends[i], selectedGroup);
+          fs.readFile(userDataPath + '/PinifyGroupData/' + selectedGroup.id + '.json', 'utf8', (err, data) => {
+            if (err) {
+              console.log(err);
+            }
+            else {
+              let obj = JSON.parse(data);
+              let e = false;
+              for (let j = 0; j < obj.members.length; j++) {
+                if (obj.members[j].user_id == friends[i].id) e = true;
+              }
+              if (!e) {
+                obj.members.push({ user_id: friends[i].id, user_f_name: friends[i].name })
+                let json = JSON.stringify(obj, null, 4); //remove ,null,4 for optimized print
+                fs.writeFile(userDataPath + '/PinifyGroupData/' + selectedGroup.id + '.json', json, 'utf8', (err, fdata) => {
+                  if (err) console.log(err);
+                  else {
+                    $("#group-dropdown-input").val('');
+                    LoadGroupByFileName(selectedGroup.id + '.json', true);
+                  }
+                });
+              }
+            }
+          });
+        }
+      }
+    });
+    $("#enter-password-button").on('click', function () {
+      if ($("#user-password-input").val().length) {
+        let config = {
+          id: Profile.id,
+          password: $("#user-password-input").val()
+        };
+        let json = JSON.stringify(config, null, 4); //remove ,null,4 for optimized print
+        fs.writeFile(userDataPath + '/user_config.json', json, 'utf8', (err, data) => {
+          if (err) console.log(err);
+          else {
+            socket.emit('fb_initialize_user', { friends: Profile.friends.data, id: Profile.id, name: Profile.name, password: $("#user-password-input").val() });
+          }
+        });
+      }
+      else {
+        //didnt enter password
+        ShowInAppNotification("Please enter a password", "");
+      }
+    });
+    $("#group-join-password-button").on('click', function () {
+      if ($("#group-join-password-input").val().length) {
+        let group = encryptedGroups[encryptedGroups.length - 1];
+        console.log(group);
+        if (decrypt(group.password_verify, $("#group-join-password-input").val()) == group.secret_key) {
+          // if(bcrypt.compareSync($("#group-join-password-input").val(),group.password_verify)){
+          fs.readFile(userDataPath + '/PinifyGroupData/' + group.id + '.json', 'utf8', (err, data) => {
+            if (err) {
+              console.log(err.code);
+              if (err.code === 'EEXIST') {
+                alert('Group already exists.');
+                return;
+              }
+              else if (err.code === 'ENOENT') {
+                let e_group = {
+                  id: group.id,
+                  secret_key: group.secret_key,
+                  name: group.name,
+                  color: group.color,
+                  members: group.members,
+                  pins: group.pins,
+                  password: $("#group-join-password-input").val(),
+                  is_encrypted: group.is_encrypted,
+
+                };
+                $("#group-join-password-input").val('');
+                let json = JSON.stringify(e_group, null, 4); //remove ,null,4 for optimized print
+                fs.writeFile(userDataPath + '/PinifyGroupData/' + group.id + '.json', json, 'utf8', (err, data) => {
+                  if (err) console.log(err);
+                  else {
+                    LoadGroupByFileName(group.id + '.json');
+                    $("#new-group-title").val('');
+                    encryptedGroups.splice(encryptedGroups.length - 1, 1);
+                    if (!encryptedGroups.length)
+                      $("#enter-group-password-dialogue").fadeOut();
+                    else {
+                      $("#encrypted-group-name").text(encryptedGroups[encryptedGroups.length - 1].name);
+                    }
+                  }
+                });
+              }
+            }
+          });
+        }
+        else {
+          //wrong password
+          // console.log('wrong password');
+          ShowInAppNotification("Wrong password", "The password you entered for the group <b>" + group.name + "</b> is incorrect");
+          $("#group-join-password-input").val('');
+
+        }
+      }
+      else {
+        ShowInAppNotification("Please enter a password", "", true, 750);
+        //didnt enter password
+      }
+    });
+    $("#cancel-login").on('click', function(){
+      $("#user-login-dialogue-wrapper").children('input').val('');
+      $("#user-login-dialogue").fadeOut();
+    });
+    $("#cancel-register").on('click', function(){
+      $("#user-register-dialogue-wrapper").children('input').val('');
+      $("#user-login-dialogue").fadeIn(0);
+      $("#user-register-dialogue").fadeOut(200);
+    });
+    $("#skip-enter-group-password").on('click', () => {
+      encryptedGroups.splice(encryptedGroups.length - 1, 1);
+      if (!encryptedGroups.length)
+        $("#enter-group-password-dialogue").fadeOut();
+      else {
+        $("#encrypted-group-name").text(encryptedGroups[encryptedGroups.length - 1].name);
+      }
+    });
+    $("#refuse-enter-group-password").on('click', () => {
+      let group = encryptedGroups[encryptedGroups.length - 1];
+      socket.emit('leave-group', group);
+      encryptedGroups.splice(encryptedGroups.length - 1, 1);
+      if (!encryptedGroups.length)
+        $("#enter-group-password-dialogue").fadeOut();
+      else {
+        $("#encrypted-group-name").text(encryptedGroups[encryptedGroups.length - 1].name);
+      }
+    });
+    $("#group-members-dropdown").on('click', 'a', function () {
+      $("#group-dropdown-input").val($(this).text());
+    });
+    $("#group-dropdown-input").focus(function () {
+      if (!$("#group-members-dropdown").is(':visible')) {
+        $("#group-members-dropdown").fadeIn(200);
+      }
+    });
+    $("#group-dropdown-input").blur(function () {
+      if ($("#group-members-dropdown").is(':visible')) {
+        $("#group-members-dropdown").fadeOut(200);
+      }
+    });
+    $("#group-members-list").on('click', '.group-member-list-item', function () {
+      console.log($(this));
+      $(this).toggleClass('group-member-list-item-unfolded');
+    })
+    $("#g-info-group-members").on('click', function () {
+      if (selectedGroup.id != 'offline-pins') {
+        FadeDialogueIn("#group-members-dialogue");
+      }
+    });
+    let date = require('date-and-time')
+    $("#fb-login-btn").on("click", function () {
+      ipcRenderer.send("fb-authenticate", "yes");
+    });
+    $("#fb-logout-btn").on("click", function () {
+      fs.unlink(userDataPath + '/user_config.json', function (err) {
+        if (err) return console.log(err);
+        if(Profile.login_method == 'facebook')
+          ipcRenderer.send("fb-logout", "yes");
+        else if(Profile.login_method == 'pinify'){
+          stash.set('pinify_logged_in', false);
+          location.reload();
+        }
+      });
+      //maybs delete the local groups?
+    });
+    if (stash.get('fb_logged_in')) {
+      ipcRenderer.send("fb-authenticate", "yes");
+    }
+    $(".show-list-btn").on("click", function () {
+      ToggleGroupList();
+    });
+    $("#create-group-button").on("click", function () {
+      FadeDialogueIn("#create-group-dialogue");
+    });
+    $("#create-pin-button").on("click", function () {
+      $("#create-pin-text").val('');
+      FadeDialogueIn("#create-pin-dialogue");
+    });
+    $("#own-pp").on("click", function () {
+      FadeDialogueIn("#profile-dialogue");
+    });
+    $("#own-friends-button").on("click", function(){
+      FadeDialogueIn("#friends-dialogue");
+      //update the friends list
+      $("#friends-left-bar").children('.friend-list-item').remove();
+      if(Profile.friends.data.length){
+        for(let i = 0; i < Profile.friends.data.length; i++){
+          let f = $("<div/>",{
+            class: "friend-list-item",
+            text: Profile.friends.data[i].name
+          }).appendTo("#friends-left-bar");
+        }
+      }
+      else{
+        $("#no-friends-thing").remove();
+        let noexist = $("<div/>",{
+          text: "No Friends Yet",
+          id: 'no-friends-thing'
+        }).appendTo("#friends-left-bar");
+      }
+    })
+
+    //PIN ADDED
+    $("#new-pin-button").on("click", function () {
+      let pin_text = $("#new-pin-text").val();
+      let init_text = pin_text;
+      if (selectedGroup.is_encrypted) {
+        pin_text = encrypt(pin_text, selectedGroup.password);
+      }
+      let now = new Date();
+      let id = Math.round((new Date()).getTime());
+      let d_time = date.format(now, "ddd MMM DD YYYY \n hh:mm:ss A");
+      // d_time[10] = '\n';
+      let pin = {
+        id: id,
+        data: pin_text,
+        date_time: d_time,
+        creator: Profile.name
+      }
+
+      fs.readFile(userDataPath + '/PinifyGroupData/' + selectedGroup.fileName, 'utf8', (err, data) => {
+        if (err) {
+          console.log(err);
+        }
+        else {
+          let obj = JSON.parse(data);
+          obj.pins.push(pin);
+          let json = JSON.stringify(obj, null, 4); //remove ,null,4 for optimized print
+          fs.writeFile(userDataPath + '/PinifyGroupData/' + selectedGroup.fileName, json, 'utf8', (err, data) => {
+            if (err) console.log(err);
+            else {
+              pins[selectedGroup.id].push(pin);
+              if (groups[selectedGroup.id].is_encrypted) {
+                pin.data = decrypt(pin.data, groups[selectedGroup.id].password);
+                pins[selectedGroup.id][pins[selectedGroup.id].length - 1].decrypted = true;
+              }
+              LoadSinglePin(pin);
+              if (selectedGroup.id != 'offline-pins') {
+                socket.emit('create-pin', {
+                  pin_id: id,
+                  group_id: selectedGroup.id,
+                  secret_key: selectedGroup.secret_key,
+                  data: pin_text,
+                  date_time: d_time
+                });
+              }
+            }
+          });
+        }
+      });
+      $("#new-pin-text").val('');
+      FadeDialogueOut("#create-pin-dialogue");
+      $(".no-pins-message").remove();
+    });
+    function base64_encode(file) {
+        // read binary data
+        var bitmap = fs.readFileSync(file);
+        // convert binary data to base64 encoded string
+        return new Buffer(bitmap).toString('base64');
+    }
+    //GROUP ADDED
+    $("#new-group-button").on("click", function () {
+      if (Profile.id) {
+        if (!$("#new-group-title").val().length) {
+          console.log("no title");
+          return;
+        }
+        let c = $("#group-color-picker").css('background-color');
+
+        let gr_image = $("#group-image-picker").attr('data-image-url');
+        let b64_img;
+        if(gr_image.length)
+          b64_img = base64_encode(gr_image);
+        let image_ext = $("#group-image-picker").attr('data-image-extension');
+        $("#group-image-picker").attr('data-image-extension','');
+        $("#group-image-picker").attr('data-image-url','');
+        $("#group-image-picker").text('no image');
+        let img = null;
+        if(gr_image.length)
+          img = 'data:image/' + image_ext + ';base64,' + b64_img;
+        let groupObj = {
+          name: $("#new-group-title").val(),
+          color: c.substring(4, c.length - 1),
+          password: $("#new-group-password").val(),
+          image: img
+        }
+        console.log(groupObj);
+        // console.log('data:image/png;base64,' + b64_img);
+        socket.emit('create-group', groupObj);
+        FadeDialogueOut("#create-group-dialogue");
+      }
+    });
+    //PIN DELETED
+    $("#pins-wrapper").on("click", '.delete-pin-button', function () {
+      //delete
+      fs.readFile(userDataPath + '/PinifyGroupData/' + selectedGroup.fileName, 'utf8', (err, data) => {
+        if (err) {
+          console.log(err);
+        }
+        else {
+          let obj = JSON.parse(data);
+          for (let i = 0; i < obj.pins.length; i++) {
+            if (obj.pins[i].id == $(this).parents(".pin-wrapper").attr('id')) obj.pins.splice(i, 1);
+          }
+          let json = JSON.stringify(obj, null, 4); //remove ,null,4 for optimized print
+          fs.writeFile(userDataPath + '/PinifyGroupData/' + selectedGroup.fileName, json, 'utf8', (err, data) => {
+            if (err) console.log(err);
+            else {
+              // LoadGroupByFileName(selectedGroup.fileName,true);
+              for (let i = 0, p = pins[selectedGroup.id]; i < p.length; i++) {
+                if (p[i].id == $(this).parents(".pin-wrapper").attr('id')) pins[selectedGroup.id].splice(i, 1);
+              }
+              $(this).parents(".pin-wrapper").remove();
+              if (pins[selectedGroup.id].length == 0) {
+                let wr = $("<div/>", {
+                  class: "pin-wrapper no-pins-message"
+                }).prependTo("#pins-wrapper");
+                let n = $("<div/>", {
+                  class: "pin-creator-name",
+                  text: "Pinify"
+                }).appendTo(wr);
+                let t = $("<div/>", {
+                  class: "text pin closed",
+                  text: "This group has no pins yet :')"
+                }).appendTo(wr);
+              }
+            }
+          });
+        }
+      });
+    });
+    // $("#pins-wrapper").on("click", '.edit-pin-button', function () {
+    //   alert("edit");
+    // });
+    $("#pins-wrapper").on("contextmenu", ".pin-wrapper", function () {
+      if ($("#left-side-bar").css("width") == '72px' || (($("#left-side-bar").css("width") == '200px') && window.innerWidth > 450)) {
+        if ($(this).children(".pin-buttons").css("display") == "none") {
+          $(".pin-wrapper").each(function () {
+            $(this).children(".pin-buttons").fadeOut(300);
+          })
+          $(this).children(".pin-buttons").fadeIn(300);
+        }
+        else {
+          $(this).children(".pin-buttons").fadeOut(300);
+        }
+      }
+    });
+    $("#group-wrapper").on("contextmenu", ".group-list-item", function () {
+      if ($("#left-side-bar").css("width") == '72px') {
+        ToggleGroupList();
+      }
+      if ($(this).children(".group-context").css("display") == "none") {
+        $(".group-list-item").each(function () {
+          $(this).children(".group-context").fadeOut(100);
+        })
+        $(this).children(".group-context").fadeIn(100);
+      }
+      else {
+        $(this).children(".group-context").fadeOut(100);
+      }
+    });
+    $(window).resize(function () {
+      if (($("#left-side-bar").css("width") == '200px') && window.innerWidth < 450) {
+        $(".pin-wrapper").each(function () {
+          $(this).children(".pin-buttons").fadeOut(300);
+
+        });
+      }
+    });
+    $("#dark-cover").on("click", function () {
+      $("#dark-cover").fadeOut(300);
+      ToggleDialogue();
+    });
+    //PINS CONTEXT MENU
+    let t1 = 0;
+    let f = false;
+    $("#pins-wrapper").on("mousedown", '.pin-wrapper', function (e) {
+      if (e.which == 1) {
+        t1 = setTimeout(() => {
+          if ($("#left-side-bar").css("width") == '72px' || (($("#left-side-bar").css("width") == '200px') && window.innerWidth > 450)) {
+            if ($(this).children(".pin-buttons").css("display") == "none") {
+              $(".pin-wrapper").each(function () {
+                $(this).children(".pin-buttons").fadeOut(300);
+              })
+              $(this).children(".pin-buttons").fadeIn(300);
+            }
+            else {
+              $(this).children(".pin-buttons").fadeOut(300);
+            }
+          }
+          //open context menu
+          f = true;
+        }, 350);
+        f = false;
+      }
+    });
+    $("#pins-wrapper").on('mouseup', '.pin-wrapper', function (e) { //OPEN PIN
+      if (e.which == 1) {
+        clearTimeout(t1);
+        if (!f) {
+          $(".text, .pin").each(function () {
+            $(this).removeClass("open");
+            $(this).addClass("closed");
+
+          });
+          let t = $(this);
+          $(".pin-wrapper").each(function () {
+            $(this).children(".pin-buttons").fadeOut(300);
+            if ($(this) != t) {
+              $(this).children('.youtube-video-preview').fadeOut(300);
+            }
+            // $(this).children('.youtube-video-preview').fadeOut(300);
+          })
+          $(this).children(".pin").removeClass("closed");
+          $(this).children(".pin").addClass("open");
+          if (!$(this).children('.youtube-video-preview').is(":visible")) {
+            $(this).children('.youtube-video-preview').fadeIn(300);
+          }
+
+        }
+      }
+    });
+    //GROUP CONTEXT MENU
+    let t2 = 0;
+    let f2 = false;
+    $("#group-wrapper").on("mousedown", '.group-list-item', function (e) {
+      if (e.which == 1) {
+        t2 = setTimeout(() => {
+          if ($("#left-side-bar").css("width") == '72px') {
+            ToggleGroupList();
+          }
+          if ($(this).children(".group-context").css("display") == "none") {
+            $(".group-list-item").each(function () {
+              $(this).children(".group-context").fadeOut(300);
+            })
+            $(this).children(".group-context").fadeIn(300);
+          }
+          else {
+            $(this).children(".group-context").fadeOut(300);
+          }
+          f2 = true;
+        }, 350);
+        f2 = false;
+      }
+    });
+    $("#group-wrapper").on('mouseup', '.group-list-item', function (e) {
+      if (e.which == 1) {
+        clearTimeout(t2);
+        if (!f2) {
+          ToggleToGroup($(this).attr('id'));
+          // $(".group-list-item").each(function(){
+          //   $(this).removeClass("group-selected");
+          // })
+          // $(this).addClass("group-selected");
+          // LoadPinsByGroupId($(this).attr('id'));
+          // selectedGroup = groups[$(this).attr('id')];
+          // $("#g-info-group-name").text(selectedGroup.name);
+          // $("#g-info-group-members").text(selectedGroup.members.length+" member/s");
+        }
+      }
+    });
+    function ToggleToGroup(id) {
+      $(".group-list-item").each(function () {
+        $(this).removeClass("group-selected");
+      })
+      $("#" + id).addClass("group-selected");
+      LoadPinsByGroupId(id);
+      selectedGroup = groups[id];
+      $("#g-info-group-name").text(selectedGroup.name);
+    }
+    $("#group-wrapper").on('click', '.group, .button', function () {
+      if ($(this).hasClass('leave')) {
+        alert('leaving ' + groups[$(this).parents('.group-list-item').attr('id')].name);
+        LeaveGroup($(this).parents('.group-list-item').attr('id'));
+      }
+      else if ($(this).hasClass('edit')) {
+        alert('edit ' + groups[$(this).parents('.group-list-item').attr('id')].name);
+      }
+    });
+    
+    $("#pins-wrapper").on('click', '.link', function () {
+      if (!$(this).hasClass('youtube-video-preview')) {
+        shell.openExternal($(this).attr('id'));
+      }
+      else {
+        if ($(this).hasClass("link-hidden")) {
+          $(this).prepend($("<iframe allowfullscreen='allowfullscreen' frameborder='0' scrolling='no' marginheight='0' marginwidth='0' class = 'yt-vid-prev' type='text/html' src='https://www.youtube.com/embed/" + getYoutubeIdByUrl($(this).attr('id')) + "?autoplay=0&fs=1&iv_load_policy=3&showinfo=0&rel=0&cc_load_policy=0&start=0&end=0'></iframe>"));
+        }
+        else {
+          $(this).children('.yt-vid-prev').remove();
+        }
+        $(this).toggleClass('link-hidden');
+      }
+    });
+    function ToggleDialogue(id) {
+      if ($(id).hasClass("dialogue-hidden")) {
+        $(".bottom-dialogue").each(function () {
+          $(this).removeClass("dialogue-shown");
+          $(this).addClass("dialogue-hidden");
+        });
+        $(id).removeClass("dialogue-hidden");
+        $(id).addClass("dialogue-shown");
+        if (id.substring(1) == 'create-pin-dialogue') {
+          $("#new-pin-text").focus();
+        }
+        else if (id.substring(1) == 'create-group-dialogue') {
+          $("#new-group-title").focus();
+        }
+        $("#dark-cover").fadeIn(300);
+      }
+      else {
+        $(".bottom-dialogue").each(function () {
+          $(this).removeClass("dialogue-shown");
+          $(this).addClass("dialogue-hidden");
+        });
+        $("#dark-cover").fadeOut(300);
+      }
+    }
+    function FadeDialogueIn(id) {
+      if ($(id).hasClass("dialogue-hidden")) {
+        $(".bottom-dialogue").each(function () {
+          $(this).removeClass("dialogue-shown");
+          $(this).addClass("dialogue-hidden");
+        });
+        $(id).removeClass("dialogue-hidden");
+        $(id).addClass("dialogue-shown");
+        if (id.substring(1) == 'create-pin-dialogue') {
+          $("#new-pin-text").focus();
+        }
+        else if (id.substring(1) == 'create-group-dialogue') {
+          $("#new-group-title").focus();
+        }
+        $("#dark-cover").fadeIn(300);
+      }
+    }
+    function FadeDialogueOut(id) {
+      if (!$(id).hasClass("dialogue-hidden")) {
+        $(".bottom-dialogue").each(function () {
+          $(this).removeClass("dialogue-shown");
+          $(this).addClass("dialogue-hidden");
+        });
+        $("#dark-cover").fadeOut(300);
+      }
+    }
+    function FBLogIn(profile) {
+      // console.log(profile);
+      $("#fb-login-banner").fadeOut(100);
+      $("#user-login-dialogue").fadeOut(100);
+      $("#top-bar").fadeIn(100);
+      // ShowInAppNotification("Logged in", "Welcome " + profile.name);
+      Profile = profile;
+      $("#friend-count").text(Profile.friends.data.length);
+      $("#change-profile-picture-wrapper").children('.image').css('background','url("' + profile.picture.data.url + '")');
+      Profile.login_method = 'facebook';
+      for (let i = 0; i < Profile.friends.data.length; i++) {
+        $("#group-members-dropdown").append($("<a/>", { text: Profile.friends.data[i].name, id: "dd_" + Profile.friends.data[i].id, href: '#' }));
+      }
+      fs.readFile(userDataPath + '/user_config.json', 'utf8', (err, data) => {
+        if (err) {
+          console.log(err.code);
+          if (err.code === 'EEXIST') {
+            console.error('file already exists');
+            return;
+          }
+          else if (err.code === 'ENOENT') {
+            $("#password-dialogue-firstname").text(Profile.name.split(' ')[0]);
+            $("#enter-password-dialogue").fadeIn(200, () => {
+              $("#enter-password-dialogue").css('display', 'table');
+            });
+          }
+        }
+        else {
+          // console.log('sending init');
+          socket.emit('fb_initialize_user', { friends: Profile.friends.data, id: Profile.id, name: Profile.name, password: JSON.parse(data).password, image_url: Profile.picture.data.url });
+        }
+      });
+    }
+    function AddFriend(ftoken){
+      if(Profile.token){
+        console.log('nao');
+        socket.emit('add-friend',{token: Profile.token, friend_token: ftoken});
+      }
+      else{
+        console.log('not yet');
+        setTimeout(AddFriend(ftoken), 1000);
+      }
+    }
+    function PinifyLogIn(profile){
+      // console.log(profile);
+      $("#fb-login-banner").fadeOut(100);
+      $("#user-login-dialogue").fadeOut(100);
+      if($("#user-register-dialogue").is(":visible"))
+        $("#user-register-dialogue").fadeOut(200);
+      $("#top-bar").fadeIn(100);
+      Profile = profile;
+      $("#friend-count").text(Profile.friends.data.length);
+      let img;
+      // console.log(profile.image_url);
+      if(profile.image_url.length){
+        img = profile.image_url;
+      }
+      else{
+        img = 'images/temp_pp.png';
+      }
+      // console.log(img);
+      $("#change-profile-picture-wrapper").children('.image').css('background','url("' + img + '")');
+      Profile.login_method = 'pinify';
+      stash.set('pinify_logged_in', true);
+      stash.get('pinify_logged_in');
+      let config = {
+        id: Profile.id,
+        password: Profile.password
+      };
+      let json = JSON.stringify(config, null, 4); //remove ,null,4 for optimized print
+      fs.writeFile(userDataPath + '/user_config.json', json, 'utf8', (err, data) => {
+        // console.log(data);
+        // console.log(userDataPath + '/user_config.json');
+        if (err) console.log(err);
+      });
+      $("#own-name").text(Profile.name);
+      if(Profile.image_url.length){
+        $("#own-pp").attr('src',Profile.image_url);
+      }
+      $("#group-members-dropdown").empty();
+      for (let i = 0; i < Profile.friends.data.length; i++) {
+        $("#group-members-dropdown").append($("<a/>", { text: Profile.friends.data[i].name, id: "dd_" + Profile.friends.data[i].id, href: '#' }));
+      }
+      // console.log(profile);
+    }
+    //GROUP LOADING
+    function LoadPinsByGroupId(id) {
+      $("#pins-wrapper").children(".pin-wrapper").remove();
+      let mem_text = "members";
+      if (groups[id].members.length == 1) {
+        mem_text = "member";
+      }
+      // console.log(groups[id].members);
+      $("#group-members-dropdown").empty();
+      let temp_friends = Profile.friends.data;
+      for (let i = 0; i < temp_friends.length; i++) {
+        let a = true;
+        for (let j = 0; j < groups[id].members.length; j++) {
+          if (groups[id].members[j].user_id == temp_friends[i].id) {
+            a = false;
+          }
+        }
+        if (a) {
+          $("#group-members-dropdown").append($("<a/>", { text: temp_friends[i].name, id: "dd_" + temp_friends[i].id, href: '#' }));
+        }
+      }
+      $("#group-members-list").empty();
+      for (let i = 0; i < groups[id].members.length; i++) {
+        $("#group-members-list").append($("<div/>", { class: 'group-member-list-item', id: 'gml_' + groups[id].members[i].user_id, text: groups[id].members[i].user_f_name }))
+      }
+      $("#g-info-group-members").text(groups[id].members.length + " " + mem_text);
+      if (id == 'offline-pins') {
+        $("#g-info-group-members").fadeOut("fast");
+      }
+      else {
+        if (!$("#g-info-group-members").is(":visible")) {
+          $("#g-info-group-members").fadeIn("fast");
+        }
+      }
+
+      if (pins[id].length) {
+        if (groups[id].is_encrypted) {
+          for (let i = 0, p = pins[id]; i < p.length; i++) {
+            if (pins[id][i].decrypted == undefined) {
+              pins[id][i].data = decrypt(pins[id][i].data, groups[id].password);
+              pins[id][i].decrypted = true;
+            }
+          }
+        }
+        for (let i = 0, p = pins[id]; i < p.length; i++) {
+          LoadSinglePin(p[i]);
+        }
+      }
+      else {
+        let wr = $("<div/>", {
+          class: "pin-wrapper no-pins-message"
+        }).prependTo("#pins-wrapper");
+        let n = $("<div/>", {
+          class: "pin-creator-name",
+          text: "Pinify"
+        }).appendTo(wr);
+        let t = $("<div/>", {
+          class: "text pin closed",
+          text: "This group has no pins yet :')"
+        }).appendTo(wr);
+      }
+    }
+    function LoadSinglePin(pin) {
+      // console.log(pin);
+      if (pin.group_id != undefined) {
+        for (let i = 0; i < groups[pin.group_id].members.length; i++) {
+          if (groups[pin.group_id].members[i].user_id == pin.creator) {
+            pin.creator = groups[pin.group_id].members[i].user_f_name;
+          }
+        }
+      }
+
+      let p_color = '160,160,160';
+      let wr = $("<div/>", {
+        class: "pin-wrapper",
+        // style: "border-left: 2px solid rgb("+p_color+");",
+        id: pin.id
+      }).prependTo("#pins-wrapper");
+      let n = $("<div/>", {
+        class: "pin-creator-name",
+        text: pin.creator
+      }).appendTo(wr);
+      let t = $("<div/>", {
+        class: "text pin closed",
+        text: pin.data
+      }).appendTo(wr);
+      let pbtns = $("<div/>", {
+        class: "pin-buttons"
+      }).appendTo(wr);
+      let d = $("<div/>", {
+        class: "pin-date-time",
+        html: "<i style = 'font-size:11px'>" + pin.date_time + "</i>",
+        style: "padding-right: 5px;"
+
+      }).insertBefore(pbtns);
+      // let pdtl = $("<div/>",{
+      //   class: "pin-details",
+      //   html: pin.date_time
+      // }).appendTo(pbtns);
+      if (pin.creator == Profile.name || 'Me') {
+        let dbtn = $("<div/>", {
+          class: "delete-pin-button",
+          text: "Delete"
+        }).appendTo(pbtns);
+        // let ebtn = $("<div/>", {
+        //   class: "edit-pin-button",
+        //   text: "Edit"
+        // }).appendTo(pbtns);
+      }
+      ProcessPin(pin);
+    }
+    function LoadGroupByFileName(file, show = false) {
+      fs.readFile(userDataPath + '/PinifyGroupData/' + file, 'utf8', (err, data) => {
+        if (err) {
+          // console.log(err);
+        }
+        else {
+          let obj = JSON.parse(data);
+          // console.log(obj);
+          if (obj.is_encrypted && !obj.password.length) {
+            AskForEncryptedGroupPassword(group);
+          }
+          else {
+            ConstructGroup(obj);
+            pins[obj.id] = obj.pins;
+            if (obj.is_encrypted) {
+              obj.name = '\uD83D\uDD12 ' + obj.name;
+            }
+            obj.fileName = file;
+            groups[obj.id] = obj;
+            if (obj.id == 'offline-pins') {
+              $("#offline-pins").addClass("group-selected");
+              LoadPinsByGroupId("offline-pins");
+              selectedGroup = obj;
+              $("#g-info-group-name").text(selectedGroup.name);
+            }
+            group_names.push(obj.name);
+            if (show) {
+              LoadPinsByGroupId(selectedGroup.id);
+            }
+            SortGroups();
+          }
+        }
+      });
+    }
+    function LoadGroupByFileNameBackground() {
+      fs.readFile(userDataPath + '/PinifyGroupData/' + file, 'utf8', (err, data) => {
+        if (err) {
+          console.log(err);
+        }
+        else {
+          let obj = JSON.parse(data);
+          // ConstructGroup(obj);
+          pins[obj.id] = obj.pins;
+          obj.fileName = file;
+          groups[obj.id] = obj;
+          // if(obj.id == 'offline-pins'){
+          //   $("#offline-pins").addClass("group-selected");
+          //   LoadPinsByGroupId("offline-pins");
+          //   selectedGroup = obj;
+          //   $("#g-info-group-name").text(selectedGroup.name);
+          // }
+          group_names.push(obj.name);
+          // if(show){
+          // LoadPinsByGroupId(selectedGroup.id);
+          // }
+          // SortGroups();
+        }
+      });
+    }
+    function LeaveGroup(id) {
+      if (id != 'offline-pins') {
+        fs.stat(userDataPath + '/PinifyGroupData/' + id + '.json', function (err, stats) {
+          // console.log(stats);
+          if (err) {
+            return console.error(err);
+          }
+          fs.unlink(userDataPath + '/PinifyGroupData/' + id + '.json', function (err) {
+            if (err) return console.log(err);
+          });
+        });
+        if (selectedGroup.id == id) {
+          selectedGroup = groups['offline-pins'];
+          LoadPinsByGroupId('offline-pins');
+        }
+        $("#" + id).remove();
+        socket.emit('leave-group', groups[id]);
+        LoadGroups(true);
+      }
+    }
+    function AddMemberToGroup(user, group) {
+      if (group.id != 'offline-pins') {
+        let data = {
+          group_id: group.id,
+          secret_key: group.secret_key,
+          user_id: user.id,
+          user_name: user.name
+        };
+        socket.emit('add-member-to-group', data);
+      }
+    }
+    function ProcessPins() {
+      for (let i = 0, p = pins[selectedGroup.id]; i < p.length; i++) {
+        if (p[i].links) {
+          $("#" + p[i].id).children('.youtube-video-preview').empty();
+        }
+
+        pins[selectedGroup.id][i].links = [];
+        switch (p[i].type) {
+          case "text":
+            break;
+          case "youtube-video":
+            let link_re = /(?:(?:https?|ftp|file):\/\/|www\.|ftp\.)(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[-A-Z0-9+&@#\/%=~_|$?!:,.])*(?:\([-A-Z0-9+&@#\/%=~_|$?!:,.]*\)|[A-Z0-9+&@#\/%=~_|$])/igm;
+            let link_match = p[i].data.match(link_re);
+            if (link_match.length) {
+              for (let j = 0; j < link_match.length; j++) {
+                if (getYoutubeIdByUrl(link_match[j])) {
+                  $.post("http://andithemudkip.esy.es/Pinify/getVideoInfo.php", { id: getYoutubeIdByUrl(link_match[j]) }, (data) => {
+                    let obj = JSON.parse(data.toString());
+                    obj.url = link_match[j];
+                    let u = true;
+                    for (let k = 0; k < pins[selectedGroup.id][i].links.length; k++) {
+                      if (pins[selectedGroup.id][i].links[k].data.url == obj.url) {
+                        u = false;
+                      }
+                    }
+                    if (u) {
+                      pins[selectedGroup.id][i].links.push({ domain: 'youtube', data: obj });
+                      let v_prev = $('<div/>', { class: ".youtube-video-preview", id: obj.url }).insertBefore($("#" + p[i].id).children('.pin-buttons'));  //.appendTo($("#"+p[i].id));
+                      $(v_prev).append("<img class = 'yt-vid-prev' src = '" + obj.thumbnail_s + "'>");
+                      let vid_title = $("<div/>", { class: "yt-vid-title", html: obj.title + "<br><i style = 'height: 20px;font-size: 14px; vertical-align: middle; line-height: 17px;' class = 'material-icons'>person</i> " + numberWithCommas(obj.viewcount) }).appendTo(v_prev);
+                    }
+                  });
+                }
+                else {
+                  //regular link
+                  // $("#"+p[i].id).children(".link-preview").attr('id',link_match[j]);
+                  // $("#"+p[i].id).children(".youtube-video-preview").append("<img class = 'yt-vid-prev' src = '" + obj.thumbnail_s +"'>");
+                  // let parent = $("#"+p[i].id).children(".youtube-video-preview");
+                  // let vid_title = $("<div/>", {class:"yt-vid-title", html: obj.title + "<br><i style = 'height: 20px;font-size: 14px; vertical-align: middle; line-height: 17px;' class = 'material-icons'>person</i> " + numberWithCommas(obj.viewcount)}).appendTo(parent);
+                }
+              }
+            }
+            break;
+        }
+      }
+    }
+  </script>
+</body>
+
+</html>
