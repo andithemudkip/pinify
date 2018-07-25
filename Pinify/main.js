@@ -44,12 +44,19 @@ function createWindow () {
   logEverywhere("createWindow# " + deeplinkingUrl); //app just opened
   // console.log(deeplinkingUrl);
   var dlink_url = deeplinkingUrl[0];
-  if(dlink_url.substring(9,15) == 'friend'){
-    let token_to_add = dlink_url.substring(16, dlink_url.length-1);
-    mainWindow.webContents.once('dom-ready', () => {
-      mainWindow.webContents.executeJavaScript('AddFriend(' + token_to_add + ')');
-    });
+  try{
+    
+    if(dlink_url.substring(9,15) == 'friend'){
+      let token_to_add = dlink_url.substring(16, dlink_url.length-1);
+      mainWindow.webContents.once('dom-ready', () => {
+        mainWindow.webContents.executeJavaScript('AddFriend(' + token_to_add + ')');
+      });
+    }
   }
+  catch(err){
+
+  }
+  
   // Emitted when the window is closed.
   mainWindow.on('closed', function () {
     // Dereference the window object, usually you would store windows
