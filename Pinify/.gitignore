@@ -1,0 +1,7 @@
+node_modules
+electron-builder.yml
+GroupData
+user_config
+dist
+main_backup.js
+main_backup_new.js
