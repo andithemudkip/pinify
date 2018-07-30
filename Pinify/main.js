@@ -186,7 +186,7 @@ ipcMain.on("fb-authenticate",function (event, arg) {
     var authWindow = new BrowserWindow({ width: 300, height: 400, show: false, backgroundColor: '#2d2d32',
       parent: mainWindow, modal: true, webPreferences: {nodeIntegration: false, webSecurity: false, plugins: true} });
     //var facebookAuthURL = "https://www.qbytegames.com/Pinify/login.html";
-    var facebookAuthURL = "http://89.40.17.194/Pinify/login.html";
+    var facebookAuthURL = "http://www.sphynxgames.com/Pinify/login.html";
     authWindow.loadURL(facebookAuthURL);
     // authWindow.webContents.openDevTools();
     authWindow.show();
@@ -238,7 +238,7 @@ ipcMain.on("fb-authenticate",function (event, arg) {
     authWindow.webContents.on('new-window', function(e, url){
       e.preventDefault();
       //const redirect = "https://www.qbytegames.com/Pinify/login_successful.html" //89.40.17.194
-      const redirect = "https://89.40.17.194/Pinify/login_successful.html";
+      const redirect = "https://www.sphynxgames.com/Pinify/login_successful.html";
       authWindow.loadURL(`https://www.facebook.com/v3.0/dialog/oauth?client_id=211901916254251&redirect_uri=${redirect}&response_type=token&display=popup&scope=public_profile%2Cuser_friends`);
     });
   });
