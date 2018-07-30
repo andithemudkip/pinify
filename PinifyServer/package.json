@@ -1,0 +1,25 @@
+{
+  "name": "please-hate-my-game",
+  "version": "0.0.1",
+  "description": "Massively Multiplayer Platformer",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [
+    "mmp",
+    "node",
+    "multiplayer"
+  ],
+  "author": "QBYTEGAMES",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^2.0.1",
+    "cloudinary": "^1.11.0",
+    "crypto": "^1.0.1",
+    "express": "^4.15.2",
+    "mysql": "^2.15.0",
+    "socket.io": "^1.7.3"
+  }
+}
